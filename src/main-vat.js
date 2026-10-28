@@ -1024,6 +1024,37 @@ const FPS = 24;
 const FRAME_DURATION = 1.0 / FPS;
 let prevTime = null;
 
+// A small, damped look-around keeps the room physical without moving the UI.
+const roomLook = { x: 0, y: 0, targetX: 0, targetY: 0 };
+const roomLookReducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const roomLookMouse = matchMedia('(hover: hover) and (pointer: fine)');
+function resetRoomLook() { roomLook.targetX = roomLook.targetY = 0; }
+window.addEventListener('pointermove', e => {
+  if (e.pointerType !== 'mouse' || !roomLookMouse.matches || roomLookReducedMotion.matches) return;
+  roomLook.targetX = THREE.MathUtils.clamp(e.clientX / innerWidth * 2 - 1, -1, 1);
+  roomLook.targetY = THREE.MathUtils.clamp(1 - e.clientY / innerHeight * 2, -1, 1);
+}, { passive: true });
+document.documentElement.addEventListener('pointerleave', resetRoomLook);
+window.addEventListener('blur', resetRoomLook);
+roomLookReducedMotion.addEventListener('change', resetRoomLook);
+roomLookMouse.addEventListener('change', resetRoomLook);
+
+function updateRoomLook(dt) {
+  // Freeze the camera during reading and grabbing so picking and paper poses stay stable.
+  if (activePaper || pointerState || document.hidden ||
+      document.body.classList.contains('details-open') || !document.querySelector('#flat').hidden) return;
+  const enabled = roomLookMouse.matches && !roomLookReducedMotion.matches;
+  const tx = enabled ? roomLook.targetX : 0, ty = enabled ? roomLook.targetY : 0;
+  if (Math.abs(tx - roomLook.x) + Math.abs(ty - roomLook.y) < .0001) return;
+  const ease = 1 - Math.exp(-4.5 * Math.min(dt, .05));
+  roomLook.x += (tx - roomLook.x) * ease;
+  roomLook.y += (ty - roomLook.y) * ease;
+  camera.position.set(cameraSettings.x + roomLook.x * .035,
+    cameraSettings.y + roomLook.y * .025, cameraSettings.z);
+  camera.lookAt(roomLook.x * .12, cameraSettings.targetY + roomLook.y * .10, 0);
+  alignRoomWriting(true);
+}
+
 function startAnimation() {
   prevTime = performance.now() / 1000;
   renderer.setAnimationLoop(tick);
@@ -1035,6 +1066,8 @@ function tick() {
   prevTime = now;
 
   if (!animData) return;
+
+  updateRoomLook(dt);
 
   physicsWorld.step(PHYSICS_STEP, Math.min(dt, 0.05), 3);
   applyPhysicsBounds(dt);
@@ -1206,17 +1239,21 @@ function updatePaperMotion(paper, dt) {
 // ==================================================
 // リサイズ対応
 // ==================================================
-function alignRoomWriting(){
+let roomFloorBounds = null;
+function alignRoomWriting(preserveFloorBounds = false){
  // Projection must use the final camera pose, even before the first render.
  // lookAt changes the quaternion after updating the world matrix.
  camera.updateMatrixWorld(true);
  const seam=new THREE.Vector3(0,FLOOR_VISUAL_Y,WALL_Z).project(camera);document.documentElement.style.setProperty('--room-seam',((1-seam.y)*innerHeight/2)+'px');
+ const wallWriting = document.querySelector('.wall-writing');
+ if (wallWriting) wallWriting.style.transform = `translateX(${seam.x * innerWidth / 2}px)`;
  const el=document.querySelector('.floor-writing');if(!el)return;
  // Project the four corners of lettering on the actual horizontal floor.
  const floorY=FLOOR_VISUAL_Y+.003,nearZ=1,farZ=-.25;
  const near=new THREE.Vector3(0,floorY,nearZ).project(camera);
  const groundX=screenX=>{const ray=new THREE.Vector3(screenX*2-1,near.y,.5).unproject(camera).sub(camera.position).normalize();return camera.position.x+ray.x*(floorY-camera.position.y)/ray.y};
- const left=groundX(.05),right=groundX(innerWidth<700?.87:.48);
+ if (!preserveFloorBounds || !roomFloorBounds) roomFloorBounds = [groundX(.05), groundX(innerWidth<700?.87:.48)];
+ const [left,right] = roomFloorBounds;
  const points=[[left,farZ],[right,farZ],[right,nearZ],[left,nearZ]].map(([x,z])=>{const p=new THREE.Vector3(x,floorY,z).project(camera);return[(p.x+1)*innerWidth/2,(1-p.y)*innerHeight/2]});
  const source=[[0,0],[680,0],[680,360],[0,360]],a=[];
  source.forEach(([x,y],i)=>{const [u,v]=points[i];a.push([x,y,1,0,0,0,-u*x,-u*y,u],[0,0,0,x,y,1,-v*x,-v*y,v])});
