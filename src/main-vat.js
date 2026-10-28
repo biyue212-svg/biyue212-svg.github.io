@@ -1207,6 +1207,9 @@ function updatePaperMotion(paper, dt) {
 // リサイズ対応
 // ==================================================
 function alignRoomWriting(){
+ // Projection must use the final camera pose, even before the first render.
+ // lookAt changes the quaternion after updating the world matrix.
+ camera.updateMatrixWorld(true);
  const seam=new THREE.Vector3(0,FLOOR_VISUAL_Y,WALL_Z).project(camera);document.documentElement.style.setProperty('--room-seam',((1-seam.y)*innerHeight/2)+'px');
  const el=document.querySelector('.floor-writing');if(!el)return;
  // Project the four corners of lettering on the actual horizontal floor.
